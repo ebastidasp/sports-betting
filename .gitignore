@@ -4,3 +4,8 @@
 *.csv
 *.joblib
 *.json
+# private betting history (never commit)
+trades.csv
+# keep versioned LoL template inputs (real downloads stay ignored)
+!rosters.example.csv
+!patch_tiers.example.csv
