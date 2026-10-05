@@ -1,0 +1,33 @@
+{% macro match_card(match, state) %}
+<article class="match-card" data-match-id="{{ match.id }}">
+  <div class="match-card-top">
+    <span class="event-tag event-{{ match.event|lower }}">{{ match.event }}</span>
+    {% if state == "live" %}<span class="live-tag"><span class="live-pulse"></span> LIVE</span>
+    {% else %}<span class="status-label">{{ match.status|replace("_", " ")|title }}</span>{% endif %}
+  </div>
+  <div class="match-stage">{{ match.stage or match.series_name or match.event_name }}</div>
+  <div class="teams-score-row">
+    <div class="team-block team-a">
+      {% if match.team_a.image_url %}<img class="team-logo" src="{{ match.team_a.image_url }}" alt="" loading="lazy">{% else %}<span class="team-logo logo-fallback">{{ (match.team_a.acronym or match.team_a.name)[:2]|upper }}</span>{% endif %}
+      <span class="team-name" title="{{ match.team_a.name }}">{{ match.team_a.acronym or match.team_a.name }}</span>
+      {% if state == "live" and match.score_a is not none %}<strong class="team-score">{{ match.score_a }}</strong>{% endif %}
+    </div>
+    <span class="versus">{% if state == "live" and match.score_a is not none and match.score_b is not none %}—{% else %}VS{% endif %}</span>
+    <div class="team-block team-b">
+      {% if state == "live" and match.score_b is not none %}<strong class="team-score">{{ match.score_b }}</strong>{% endif %}
+      <span class="team-name" title="{{ match.team_b.name }}">{{ match.team_b.acronym or match.team_b.name }}</span>
+      {% if match.team_b.image_url %}<img class="team-logo" src="{{ match.team_b.image_url }}" alt="" loading="lazy">{% else %}<span class="team-logo logo-fallback">{{ (match.team_b.acronym or match.team_b.name)[:2]|upper }}</span>{% endif %}
+    </div>
+  </div>
+  <div class="match-card-bottom">
+    <span>{% if state == "live" and match.current_game %}Game {{ match.current_game }} in progress{% elif match.best_of %}Best of {{ match.best_of }}{% else %}Format not listed{% endif %}</span>
+    {% if state == "upcoming" and match.scheduled_at %}<time class="match-time" data-utc="{{ match.scheduled_at }}">{{ match.scheduled_at }}</time>
+    {% elif state == "live" and match.scheduled_at %}<time class="match-time" data-utc="{{ match.scheduled_at }}">{{ match.scheduled_at }}</time>{% endif %}
+  </div>
+  <div class="match-card-actions">
+    {% if match.rescheduled %}<span class="rescheduled-label">Rescheduled</span>{% endif %}
+    <a class="text-link" href="{{ url_for('predictor', team_a=match.team_a.name, team_b=match.team_b.name, best_of=match.best_of or 5) }}">Pre-match forecast <span aria-hidden="true">↗</span></a>
+    {% if match.stream_url %}<a class="text-link stream-link" href="{{ match.stream_url }}" target="_blank" rel="noopener noreferrer">Stream <span aria-hidden="true">↗</span></a>{% endif %}
+  </div>
+</article>
+{% endmacro %}

@@ -1207,7 +1207,7 @@ def contributions(bundle: dict, rec: dict, parts: dict, p: float) -> list[tuple[
     return sorted(items, key=lambda t: -abs(t[1]))
 
 
-def predict(args: argparse.Namespace) -> None:
+def predict(args: argparse.Namespace) -> dict:
     bundle = joblib.load(args.model)
     if bundle.get("model_kind") != MODEL_KIND:
         raise SystemExit("Retrain with lol_worlds.py train.")
@@ -1358,6 +1358,33 @@ def predict(args: argparse.Namespace) -> None:
     if args.log_trade is not None:
         _log_trade(args, A, B, as_of, p_final, fair_a, fair_b, ev_a, ev_b,
                    drivers, risk, conf, tpi_a, tpi_b, sa, sb)
+
+    # Keep the CLI presentation above, while also exposing the same calculated
+    # forecast to the web app and other callers as structured data.
+    return {
+        "team_a": A,
+        "team_b": B,
+        "best_of": args.best_of,
+        "patch": args.patch or "",
+        "side_a": args.side_a,
+        "as_of": pd.Timestamp(as_of).isoformat(),
+        "game_probability": pg_adj,
+        "series_probability": p_final,
+        "fair_a": fair_a,
+        "fair_b": fair_b,
+        "confidence": conf,
+        "drivers": [{"name": name, "pp": value} for name, value in drivers],
+        "risk": {"name": risk[0], "pp": risk[1]},
+        "elo_a": float(sa.elo),
+        "elo_b": float(sb.elo),
+        "games_a": int(sa.games),
+        "games_b": int(sb.games),
+        "tpi_a": tpi_a,
+        "tpi_b": tpi_b,
+        "model_cutoff": bundle.get("cutoff"),
+        "ev_a": ev_a,
+        "ev_b": ev_b,
+    }
 
 
 TRADE_COLUMNS = ["id", "timestamp", "team_a", "team_b", "best_of", "patch", "as_of",

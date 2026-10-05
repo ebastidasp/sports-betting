@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Recent results · Rift Match Centre{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <p class="eyebrow">FROM YOUR LOCAL MATCH CACHE</p>
+  <h1>Recent results.</h1>
+  <p>Latest Worlds and MSI games from Oracle’s Elixir history, shown alongside the source league and result.</p>
+</section>
+<section class="panel results-panel">
+  <div class="results-header"><div><h2>Latest international games</h2><p>{% if summary.available %}{{ "{:,}".format(summary.games) }} total matches in cache · through {{ summary.last_game[:10] }}{% else %}Historical cache unavailable{% endif %}</p></div><a class="text-link" href="{{ url_for('predictor') }}">Open predictor →</a></div>
+  {% if results %}
+  <div class="results-table-wrap"><table class="results-table"><thead><tr><th>DATE</th><th>LEAGUE</th><th>TEAM</th><th>OPPONENT</th><th>RESULT</th></tr></thead><tbody>
+    {% for row in results %}<tr><td><time data-utc="{{ row.date }}">{{ row.date }}</time></td><td>{{ row.league }}</td><td>{{ row.team }}</td><td>{{ row.opp }}</td><td><span class="result-pill {% if row.win %}result-win{% else %}result-loss{% endif %}">{{ "WIN" if row.win else "LOSS" }}</span></td></tr>{% endfor %}
+  </tbody></table></div>
+  {% else %}<div class="empty-state"><strong>No historical rows found</strong><p>Import Oracle’s Elixir data to populate this page.</p></div>{% endif %}
+</section>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='lol.js') }}" defer></script>{% endblock %}

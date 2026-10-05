@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Match predictor · Rift Match Centre{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <p class="eyebrow">THE EXISTING MODEL</p>
+  <h1>Compare two teams.</h1>
+  <p>Choose teams from your historical cache to see the model’s Bo1, Bo3, or Bo5 estimate and its main drivers.</p>
+</section>
+
+<div class="predictor-layout">
+  <form class="predictor-form panel" method="post" action="{{ url_for('predictor') }}">
+    <div class="form-heading"><span class="step-number">01</span><div><h2>Set up the matchup</h2><p>Teams must be present in the local match history.</p></div></div>
+    {% if prefill_warning %}<div class="notice notice-warning">{{ prefill_warning }}</div>{% endif %}
+    {% if not teams %}<div class="notice notice-error">No teams found. Confirm `lol.sqlite3` is available and contains `team_games`.</div>{% endif %}
+    <label for="team-a">Team A</label>
+    <select id="team-a" name="team_a" required>
+      <option value="" {% if selected_a not in teams %}selected{% endif %} disabled>Select a team</option>
+      {% for team in teams %}<option value="{{ team }}" {% if team == selected_a %}selected{% endif %}>{{ team }}</option>{% endfor %}
+    </select>
+    <div class="versus-divider"><span>VS</span></div>
+    <label for="team-b">Team B</label>
+    <select id="team-b" name="team_b" required>
+      <option value="" {% if selected_b not in teams %}selected{% endif %} disabled>Select a team</option>
+      {% for team in teams %}<option value="{{ team }}" {% if team == selected_b %}selected{% endif %}>{{ team }}</option>{% endfor %}
+    </select>
+    <div class="form-row">
+      <div><label for="best-of">Series format</label><select id="best-of" name="best_of"><option value="1" {% if best_of|string == "1" %}selected{% endif %}>Best of 1</option><option value="3" {% if best_of|string == "3" %}selected{% endif %}>Best of 3</option><option value="5" {% if best_of|string == "5" %}selected{% endif %}>Best of 5</option></select></div>
+      <div><label for="side-a">Team A side</label><select id="side-a" name="side_a"><option value="blue" {% if side_a == "blue" %}selected{% endif %}>Blue</option><option value="red" {% if side_a == "red" %}selected{% endif %}>Red</option></select></div>
+    </div>
+    <label for="patch">Patch <span class="optional">OPTIONAL</span></label>
+    <input id="patch" name="patch" type="text" value="{{ patch }}" placeholder="e.g. 16.19">
+    <p class="field-hint">Patch tiers and current rosters are only factored in when their optional CSV files are available.</p>
+    <button class="button button-primary button-wide" type="submit" {% if not teams or not model_available %}disabled{% endif %}>Calculate forecast <span aria-hidden="true">→</span></button>
+    {% if not model_available %}<p class="field-hint field-error">Model file not found: `lol_worlds.joblib`.</p>{% endif %}
+  </form>
+
+  <section class="forecast-panel">
+    {% if error %}<div class="notice notice-error">{{ error }}</div>
+    {% elif result %}
+      <div class="forecast-result panel">
+        <div class="forecast-kicker"><span class="event-tag event-worlds">MODEL ESTIMATE</span><span class="confidence confidence-{{ result.confidence|lower }}">{{ result.confidence }} CONFIDENCE</span></div>
+        <p class="forecast-format">Bo{{ result.best_of }} series · {% if result.patch %}Patch {{ result.patch }}{% else %}Patch not specified{% endif %}</p>
+        <div class="forecast-scoreline">
+          <div><span>{{ result.team_a }}</span><strong>{{ "%.1f"|format(result.series_probability * 100) }}<small>%</small></strong><em>Fair odds {{ "%.2f"|format(result.fair_a) }}</em></div>
+          <span class="forecast-divider">—</span>
+          <div><span>{{ result.team_b }}</span><strong>{{ "%.1f"|format((1 - result.series_probability) * 100) }}<small>%</small></strong><em>Fair odds {{ "%.2f"|format(result.fair_b) }}</em></div>
+        </div>
+        <div class="probability-track"><span style="width: {{ (result.series_probability * 100)|round(1) }}%"></span></div>
+        <p class="game-probability">Single-game estimate for Team A: <strong>{{ "%.1f"|format(result.game_probability * 100) }}%</strong></p>
+        <div class="forecast-columns">
+          <div><h3>What is driving it</h3><ul class="driver-list">{% for driver in result.drivers %}<li><span>{{ driver.name|replace("_", " ")|title }}</span><strong class="{% if driver.pp >= 0 %}positive{% else %}negative{% endif %}">{{ "%+.1f"|format(driver.pp) }} pp</strong></li>{% endfor %}</ul></div>
+          <div class="risk-box"><span class="eyebrow">BIGGEST FLIP RISK</span><strong>{{ result.risk.name|replace("_", " ")|title }}</strong><span>{{ "%+.1f"|format(result.risk.pp) }} pp</span></div>
+        </div>
+        <div class="forecast-footnote">Model cutoff: {{ result.model_cutoff or "not recorded" }} · Forecast as of {{ result.as_of[:10] }} · Elo {{ "%.0f"|format(result.elo_a) }} vs {{ "%.0f"|format(result.elo_b) }}</div>
+        <div class="notice notice-info forecast-disclaimer">This is a pre-match estimate from cached history. It is not an in-game win probability.</div>
+      </div>
+    {% else %}
+      <div class="forecast-empty panel">
+        <div class="forecast-empty-art" aria-hidden="true"><span>◈</span></div>
+        <p class="eyebrow">A CLEARER READ ON THE SERIES</p>
+        <h2>Your forecast<br>will appear here.</h2>
+        <p>Choose two teams to see a calibrated series estimate, fair odds, leading factors, and the biggest source of uncertainty.</p>
+        <div class="empty-model-stats"><div><strong>{{ "{:,}".format(summary.games) if summary.available else "—" }}</strong><span>GAMES IN CACHE</span></div><div><strong>{{ summary.last_game[:10] if summary.available and summary.last_game else "—" }}</strong><span>HISTORY THROUGH</span></div></div>
+      </div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

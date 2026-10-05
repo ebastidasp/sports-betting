@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% from "match_card.html" import match_card %}
+{% block title %}Worlds & MSI · Rift Match Centre{% endblock %}
+{% block content %}
+<section class="hero">
+  <div class="hero-copy">
+    <p class="eyebrow">LEAGUE OF LEGENDS · INTERNATIONAL EVENTS</p>
+    <h1>Every series,<br><span>in one place.</span></h1>
+    <p class="hero-text">Worlds and MSI schedules, live series scores, and forecasts from your existing model.</p>
+    <a class="button button-primary" href="{{ url_for('predictor') }}">Explore a matchup <span aria-hidden="true">↗</span></a>
+  </div>
+  <div class="hero-orbit" aria-hidden="true">
+    <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
+    <div class="orbit-core"><span>WR</span><strong>LoL</strong></div>
+    <span class="orbit-label label-top">WORLDS</span><span class="orbit-label label-bottom">MSI</span>
+  </div>
+</section>
+
+<section class="summary-strip" aria-label="Historical model data">
+  <div><span class="summary-label">HISTORICAL GAMES</span><strong>{{ "{:,}".format(summary.games) if summary.available else "—" }}</strong></div>
+  <div><span class="summary-label">TEAMS IN MODEL</span><strong>{{ summary.teams if summary.available else "—" }}</strong></div>
+  <div><span class="summary-label">HISTORY THROUGH</span><strong>{{ summary.last_game[:10] if summary.available and summary.last_game else "No cache" }}</strong></div>
+  <div class="summary-action"><a href="{{ url_for('results') }}">View recent results <span aria-hidden="true">→</span></a></div>
+</section>
+
+{% if not summary.available %}
+  <div class="notice notice-error">{{ summary.error if summary.error else "The local LoL history cache is empty. Import match data before using the predictor." }}</div>
+{% endif %}
+
+<section class="match-section" aria-labelledby="live-title">
+  <div class="section-heading">
+    <div><p class="eyebrow">HAPPENING NOW</p><h2 id="live-title">Live series <span class="live-pulse"></span></h2></div>
+    <div class="feed-meta" id="live-updated">{% if live.updated_at %}Updated <time data-utc="{{ live.updated_at }}">{{ live.updated_at }}</time>{% else %}Waiting for feed{% endif %}</div>
+  </div>
+  {% if live.error %}<div class="notice {% if live.stale %}notice-warning{% else %}notice-info{% endif %}" id="live-feed-note">{{ live.error }}{% if live.stale %} Showing the last successful snapshot from <time data-utc="{{ live.updated_at }}">{{ live.updated_at }}</time>.{% endif %}</div>{% endif %}
+  <div class="match-grid" id="live-matches">
+    {% for match in live.matches %}{{ match_card(match, "live") }}{% else %}
+      <div class="empty-state" id="live-empty"><span class="empty-icon">◉</span><strong>No Worlds/MSI series live</strong><p>When a supported series starts, its current match score will appear here.</p></div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="match-section upcoming-section" aria-labelledby="upcoming-title">
+  <div class="section-heading">
+    <div><p class="eyebrow">COMING UP</p><h2 id="upcoming-title">Upcoming series</h2></div>
+    <div class="feed-meta" id="upcoming-updated">{% if upcoming.updated_at %}Updated <time data-utc="{{ upcoming.updated_at }}">{{ upcoming.updated_at }}</time>{% else %}Waiting for feed{% endif %}</div>
+  </div>
+  {% if upcoming.error %}<div class="notice {% if upcoming.stale %}notice-warning{% else %}notice-info{% endif %}" id="upcoming-feed-note">{{ upcoming.error }}{% if upcoming.stale %} Showing the last successful snapshot from <time data-utc="{{ upcoming.updated_at }}">{{ upcoming.updated_at }}</time>.{% endif %}</div>{% endif %}
+  <div class="match-grid" id="upcoming-matches">
+    {% for match in upcoming.matches %}{{ match_card(match, "upcoming") }}{% else %}
+      <div class="empty-state" id="upcoming-empty"><span class="empty-icon">⌁</span><strong>No Worlds/MSI matches found</strong><p>Schedules appear here when the provider lists a match in either international event.</p></div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="model-note">
+  <div class="note-icon">✳</div>
+  <div><strong>Live scores, pre-match forecasts</strong><p>The live tab shows the series score. Forecasts use the existing pre-match model and do not adjust to in-game events.</p></div>
+  <a href="{{ url_for('predictor') }}">Open predictor <span aria-hidden="true">→</span></a>
+</section>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='lol.js') }}" defer></script>{% endblock %}

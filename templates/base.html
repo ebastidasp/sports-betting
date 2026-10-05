@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b1020">
+  <title>{% block title %}LoL Match Centre{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='lol.css') }}">
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <div class="site-shell">
+    <header class="topbar">
+      <a class="brand" href="{{ url_for('dashboard') }}" aria-label="LoL Match Centre home">
+        <span class="brand-mark">L</span>
+        <span><strong>RIFT</strong><small>MATCH CENTRE</small></span>
+      </a>
+      <nav class="nav-links" aria-label="Main navigation">
+        <a class="{% if request.endpoint == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">Matches</a>
+        <a class="{% if request.endpoint == 'predictor' %}active{% endif %}" href="{{ url_for('predictor') }}">Predictor</a>
+        <a class="{% if request.endpoint == 'results' %}active{% endif %}" href="{{ url_for('results') }}">Results</a>
+      </nav>
+      <div class="topbar-event"><span class="status-dot"></span> WORLDS <i>·</i> MSI</div>
+    </header>
+
+    <main>{% block content %}{% endblock %}</main>
+
+    <footer class="site-footer">
+      <span>Forecasts are model estimates based on the local historical match cache.</span>
+      <span>Schedule &amp; score feed: PandaScore{% if summary and summary.last_game %} · History through {{ summary.last_game[:10] }}{% endif %}</span>
+    </footer>
+  </div>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
