@@ -1,0 +1,22 @@
+Ponte Preta vs Juventude; prediction cutoff 2026-10-05T14:36:51.785757+00:00
+Model training cutoff: 2026-10-05T14:33:21.072548+00:00
+Expected corners: home 4.30, away 5.45, total 9.75
+Ponte Preta: approximate 90% prediction interval 1-9
+Juventude: approximate 90% prediction interval 1-11
+Total: approximate 90% prediction interval 5-15
+
+Probabilidad del total de esquinas:
+   0: 0.01%
+   1: 0.09%
+   2: 0.38%
+   3: 1.13%
+   4: 2.56%
+   5: 4.69%
+   6: 7.24%
+   7: 9.70%
+   8: 11.48%
+   9: 12.21%
+  >9: 50.52%
+
+P(total corners > 9.5): 50.52%
+P(total corners < 9.5): 49.48%

@@ -19,16 +19,22 @@ Use --division-ids FIRST [SECOND] to make that selection noninteractively.
 Missing seasons are skipped; API access and match-statistics coverage still apply.
 
 Home goals use the host's home attack and visitor's away defense; away goals
-use the visitor's away attack and host's home defense. Opponent blocked-shot
-and goalkeeper-save coefficients are constrained <= 0 during optimization;
-a zero coefficient is allowed when the fitted model finds no negative effect.
-Defensive inputs are raw-count venue EWMAs, as in the supplied code (not ratios).
+use the visitor's away attack and host's home defense. Attack and Elo effects
+are nonnegative. Opponent goals/shots-on-target conceded have nonnegative
+effects; opponent save/block rates have nonpositive effects.
+Each team/venue formula is regularized toward a league-wide venue formula
+fitted on the same training partition, using its shared preprocessing.
+Training weights decay per team/venue game: recency_decay ** newer_game_count.
+Default --recency-decay 0.95 gives weights 1, .95, .9025, ... from newest back.
+Rolling statistics use normalized exponential weights (default alpha .25).
+Prediction and backtesting share the same fitting and probability functions.
 Retrain old models; existing fixture/statistics caches can be reused.
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 import os
@@ -48,7 +54,7 @@ import numpy as np
 import pandas as pd
 import requests
 from dotenv import load_dotenv
-from scipy.stats import poisson
+from scipy.stats import poisson, skellam
 from scipy.optimize import minimize_scalar, minimize
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
@@ -66,7 +72,8 @@ SECOND_DIVISION_ID: int | None = None
 LEAGUE_IDS: tuple[int, ...] = ()
 DEFAULT_DB = None
 DEFAULT_MODEL = None
-MODEL_KIND = "team_venue_opponent_defense_poisson_v3"
+MODEL_KIND = "shared_venue_opponent_elo_poisson_v9"
+DEFAULT_RECENCY_DECAY = 0.95
 COUNTRY = ""
 
 # Resolve .env relative to this script, regardless of the working directory.
@@ -97,40 +104,44 @@ STAT_ALIASES = {
     "expected_goals": "xg",
 }
 
-# Venue-specific shooting statistics, matching the Bundesliga model.
-# Efficiency is the rolling average of historical goals / total shots.
+# Pre-match, venue-specific attack and opponent defense are separate inputs.
 ATTACK_STATS = ["shots", "shots_on_target", "shot_efficiency"]
-DEFENSE_STATS = ["blocked_shots", "goalkeeper_saves"]
+DEFENSE_STATS = ["goals_conceded", "shots_on_target_conceded", "save_rate", "block_rate"]
 BASE_STATS = ATTACK_STATS + DEFENSE_STATS
 ROLLING_FEATURES = BASE_STATS.copy()
-ELO_INTERACTION_FEATURES = [f"elo_weighted_diff_{x}" for x in ATTACK_STATS]
-MODEL_FEATURES = ["elo_diff"] + ELO_INTERACTION_FEATURES
-TEAM_MODEL_FEATURES = MODEL_FEATURES + [f"opponent_{x}" for x in DEFENSE_STATS]
+MODEL_FEATURES = ["elo_diff"]
+TEAM_MODEL_FEATURES = (["elo_diff"] + [f"own_{x}" for x in ATTACK_STATS]
+                       + [f"opponent_{x}" for x in DEFENSE_STATS])
+NEGATIVE_FEATURES = {"opponent_save_rate", "opponent_block_rate"}
+TEAM_INTERCEPT_PRIOR_GAMES = 20.0
+STAT_WEIGHTING = "opponent_pre_match_venue_elo_over_1500"
 
 
 def team_inputs(frame: pd.DataFrame, *, is_home: bool) -> pd.DataFrame:
-    # Attack differences follow the scoring team's perspective. Defense is
-    # the opponent's absolute venue EWMA, never own-minus-opponent defense.
-    X = frame[MODEL_FEATURES].copy()
-    if not is_home:
-        X = -X
-    opponent = "away" if is_home else "home"
+    own, opponent = ("home", "away") if is_home else ("away", "home")
+    X = pd.DataFrame(index=frame.index)
+    X["elo_diff"] = frame.elo_diff if is_home else -frame.elo_diff
+    for stat in ATTACK_STATS:
+        X[f"own_{stat}"] = frame[f"{own}_{stat}"]
     for stat in DEFENSE_STATS:
         X[f"opponent_{stat}"] = frame[f"{opponent}_{stat}"]
     return X[TEAM_MODEL_FEATURES]
 
 
 class DefensivePoissonRegressor(RegressorMixin, BaseEstimator):
-    """L2 Poisson GLM with nonpositive opponent-defense coefficients.
+    """Sign-constrained Poisson GLM with optional pooled-coefficient prior.
 
-    Minimize weighted mean(exp(eta) - y*eta) + alpha/2 * ||beta||^2.
+    Minimize weighted Poisson loss + L2(beta) + prior_strength/2 * ||beta-prior||^2.
     The intercept is not penalized. Bounds are enforced DURING fitting;
     clipping fitted coefficients afterwards would not optimize this model.
     """
-    def __init__(self, alpha=0.01, max_iter=2000, tol=1e-8):
+    def __init__(self, alpha=0.01, max_iter=2000, tol=1e-8,
+                 prior_coef=None, prior_strength=0.0):
         self.alpha = alpha
         self.max_iter = max_iter
         self.tol = tol
+        self.prior_coef = prior_coef
+        self.prior_strength = prior_strength
 
     def fit(self, X, y, sample_weight=None):
         X, y = check_X_y(X, y, dtype=float, y_numeric=True)
@@ -146,7 +157,11 @@ class DefensivePoissonRegressor(RegressorMixin, BaseEstimator):
         mean = float(weights @ y)
         if mean <= 0:
             raise ValueError("At least one positively weighted goal is required.")
+        prior = np.zeros(X.shape[1]) if self.prior_coef is None else np.asarray(self.prior_coef, float)
+        if prior.shape != (X.shape[1],) or not np.isfinite(prior).all() or self.prior_strength < 0:
+            raise ValueError("Invalid pooled coefficient prior.")
         initial = np.zeros(X.shape[1] + 1)
+        initial[1:] = prior
         initial[0] = np.log(mean)
 
         def objective(parameters):
@@ -154,13 +169,15 @@ class DefensivePoissonRegressor(RegressorMixin, BaseEstimator):
             eta = intercept + X @ beta
             with np.errstate(over="ignore", invalid="ignore"):
                 mu = np.exp(eta)
-                loss = weights @ (mu - y * eta) + self.alpha * (beta @ beta) / 2
+                delta = beta - prior
+                loss = (weights @ (mu - y * eta) + self.alpha * (beta @ beta) / 2
+                        + self.prior_strength * (delta @ delta) / 2)
                 residual = weights * (mu - y)
-                gradient = np.r_[residual.sum(), X.T @ residual + self.alpha * beta]
+                gradient = np.r_[residual.sum(), X.T @ residual + self.alpha * beta + self.prior_strength * delta]
             return loss, gradient
 
         bounds = [(None, None)] + [
-            (None, 0.0) if name.startswith("opponent_") else (None, None)
+            (None, 0.0) if name in NEGATIVE_FEATURES else (0.0, None)
             for name in TEAM_MODEL_FEATURES
         ]
         result = minimize(objective, initial, jac=True, method="L-BFGS-B",
@@ -186,11 +203,30 @@ def fit_team_models(
     regularization: float,
     sample_weight: np.ndarray | None = None,
 ) -> dict[int, dict[str, Pipeline]]:
-    """Fit independent coefficients and preprocessing for each team/venue."""
+    """Share slopes within each venue; shrink team scoring multipliers toward 1.
+
+    The multiplier has a Gamma prior with mean 1 and exposure equivalent
+    to TEAM_INTERCEPT_PRIOR_GAMES average league matches. Use its posterior
+    mean, (weighted goals + prior goals) / (weighted exposure + prior goals).
+    No team-specific slope refits or unpenalized team intercepts are used.
+    """
     models: dict[int, dict[str, Pipeline]] = {}
     weights = None if sample_weight is None else np.asarray(sample_weight, dtype=float)
-    if weights is not None and weights.shape != (len(frame),):
-        raise ValueError("sample_weight must contain one weight per match.")
+    if weights is not None and weights.shape not in ((len(frame),), (len(frame), 2)):
+        raise ValueError("sample_weight must have shape (matches,) or (matches, 2).")
+
+    # Fit shared preprocessing and slopes using this training partition only.
+    pooled = {}
+    for column, venue in enumerate(("home", "away")):
+        venue_weights = None if weights is None else (weights if weights.ndim == 1 else weights[:, column])
+        if frame[f"{venue}_goals"].sum() <= 0:
+            continue
+        base = estimator(regularization)
+        kwargs = {} if venue_weights is None else {
+            "scale__sample_weight": venue_weights, "poisson__sample_weight": venue_weights,
+        }
+        base.fit(team_inputs(frame, is_home=(venue == "home")), frame[f"{venue}_goals"], **kwargs)
+        pooled[venue] = base
 
     for team_id in sorted(set(frame.home_id) | set(frame.away_id)):
         venues = {}
@@ -198,14 +234,31 @@ def fit_team_models(
             mask = frame[f"{venue}_id"].eq(team_id).to_numpy()
             rows = frame.loc[mask]
             y = rows[f"{venue}_goals"]
-            venue_weights = None if weights is None else weights[mask]
+            venue_weights = None if weights is None else (
+                weights[mask] if weights.ndim == 1
+                else weights[mask, 0 if venue == "home" else 1]
+            )
             # Do not silently substitute the other venue or a shared model.
             positive_goals = y.sum() if venue_weights is None else np.dot(y, venue_weights)
             if len(y) < 2 or positive_goals <= 0:
                 continue
-            model = estimator(regularization)
-            fit_kwargs = {} if venue_weights is None else {"poisson__sample_weight": venue_weights}
-            model.fit(team_inputs(rows, is_home=(venue == "home")), y, **fit_kwargs)
+            if venue not in pooled:
+                continue
+            # Shared slopes prevent small venue samples from independently
+            # discarding defensive inputs. The offset preserves team identity.
+            model = copy.deepcopy(pooled[venue])
+            inputs = team_inputs(rows, is_home=(venue == "home"))
+            exposure = model.predict(inputs)
+            local_weights = np.ones(len(rows)) if venue_weights is None else venue_weights
+            column = 0 if venue == "home" else 1
+            pooled_weights = (None if weights is None else
+                              weights if weights.ndim == 1 else weights[:, column])
+            league_goals = float(np.average(frame[f"{venue}_goals"], weights=pooled_weights))
+            prior_goals = TEAM_INTERCEPT_PRIOR_GAMES * league_goals
+            multiplier = (float(np.dot(local_weights, y)) + prior_goals) / (
+                float(np.dot(local_weights, exposure)) + prior_goals
+            )
+            model.named_steps["poisson"].intercept_ += math.log(multiplier)
             venues[venue] = model
         models[int(team_id)] = venues
     return models
@@ -675,6 +728,8 @@ class TeamState:
     away_games: int = 0
     home_ewma: dict[str, float] = field(default_factory=dict)
     away_ewma: dict[str, float] = field(default_factory=dict)
+    home_ewma_mass: dict[str, float] = field(default_factory=dict)
+    away_ewma_mass: dict[str, float] = field(default_factory=dict)
 
     # Promoted teams calibrate their home and away Elo independently.
     calibrating_home_elo: bool = False
@@ -727,10 +782,25 @@ def infer_promoted_team_elo(
 
     return (low + high) / 2.0
 
-def ewma_update(old: float | None, new: float | None, alpha: float) -> float | None:
+def ewma_update(
+    old: float | None, new: float | None, alpha: float, mass: float,
+) -> tuple[float | None, float]:
+    """Normalized exponential average; each earlier game's weight is smaller.
+
+    Track the sum of weights rather than seeding the first game at full mass.
+    A missing statistic adds no observation, but existing mass still decays
+    for that played game. This preserves game-order gaps between valid values.
+    """
+    if not math.isfinite(alpha) or not 0 < alpha < 1:
+        raise ValueError("--ewma-alpha must be strictly between 0 and 1.")
+    decayed_mass = (1.0 - alpha) * mass
     if new is None or pd.isna(new):
-        return old
-    return float(new) if old is None else alpha * float(new) + (1-alpha) * old
+        return old, decayed_mass
+    if old is None or pd.isna(old):
+        return float(new), 1.0
+    new_mass = decayed_mass + 1.0
+    return (decayed_mass * old + float(new)) / new_mass, new_mass
+
 
 def feature_difference(home_value: float | None, away_value: float | None) -> float:
     """Return a numeric difference, or NaN when either statistic is unavailable."""
@@ -739,25 +809,6 @@ def feature_difference(home_value: float | None, away_value: float | None) -> fl
     if pd.isna(home_value) or pd.isna(away_value):
         return np.nan
     return float(home_value) - float(away_value)
-
-def elo_weighted_difference(
-    home_value: float | None,
-    away_value: float | None,
-    home_elo: float,
-    away_elo: float,
-) -> float:
-    """Interaction between venue statistics and each team's pre-match Elo."""
-
-    if home_value is None or away_value is None:
-        return np.nan
-
-    if pd.isna(home_value) or pd.isna(away_value):
-        return np.nan
-
-    return (
-        float(home_value) * (home_elo / 1500.0)
-        - float(away_value) * (away_elo / 1500.0)
-    )
 
 def shot_efficiency(goals: float, shots: float | None) -> float:
     """Goals per total shot; missing counts stay missing, zero shots give zero."""
@@ -768,15 +819,37 @@ def shot_efficiency(goals: float, shots: float | None) -> float:
     return float(goals) / float(shots)
 
 
+def opponent_elo_weighted_stats(values: dict, opponent_elo: float) -> dict:
+    """Adjust historical performance using the opponent's pre-match venue Elo.
+
+    Strength = opponent Elo / INITIAL_ELO (1500). Multiply attacking stats
+    and defensive success scores; divide goals/shots conceded. Adjusted rates
+    are feature scores, not probabilities, and may exceed 1. No clipping.
+    Apply after raw rates are derived, before EWMA and before Elo updates.
+    """
+    if not math.isfinite(opponent_elo) or opponent_elo <= 0:
+        raise ValueError("Opponent Elo must be finite and positive.")
+    strength = opponent_elo / INITIAL_ELO
+    adjusted = dict(values)
+    for feature in ROLLING_FEATURES:
+        value = values.get(feature)
+        if value is None or pd.isna(value):
+            adjusted[feature] = np.nan
+        elif feature in {"goals_conceded", "shots_on_target_conceded"}:
+            adjusted[feature] = float(value) / strength
+        else:
+            adjusted[feature] = float(value) * strength
+    return adjusted
+
+
 def match_inputs(home: TeamState, away: TeamState) -> dict[str, float]:
-    """Identical pre-match inputs for training, backtesting and prediction."""
+    """Use opponent-Elo-adjusted venue EWMAs plus a separate Elo difference.
+
+    Historical stats were already adjusted before averaging; do not apply
+    the upcoming opponent's Elo a second time. Shared by all command paths.
+    """
     result = {"elo_diff": (home.home_elo - away.away_elo) / 400.0}
-    for stat in ATTACK_STATS:
-        result[f"elo_weighted_diff_{stat}"] = elo_weighted_difference(
-            home.home_ewma.get(stat), away.away_ewma.get(stat),
-            home.home_elo, away.away_elo,
-        )
-    for stat in DEFENSE_STATS:
+    for stat in ROLLING_FEATURES:
         result[f"home_{stat}"] = home.home_ewma.get(stat, np.nan)
         result[f"away_{stat}"] = away.away_ewma.get(stat, np.nan)
     return result
@@ -787,6 +860,11 @@ def build_features(
     alpha: float,
     min_history: int,
 ) -> tuple[pd.DataFrame, dict[int, TeamState], dict[int, str]]:
+    if not math.isfinite(alpha) or not 0 < alpha < 1:
+        raise ValueError("--ewma-alpha must be strictly between 0 and 1.")
+    matches = matches.copy()
+    matches["kickoff"] = pd.to_datetime(matches.kickoff, utc=True)
+    matches = matches.sort_values(["kickoff", "fixture_id"])
     states: dict[int, TeamState] = defaultdict(TeamState)
     names: dict[int, str] = {}
     examples: list[dict[str, Any]] = []
@@ -891,7 +969,7 @@ def build_features(
         examples.append(record)
 
         # Update rolling statistics after generating the pre-match features
-        # to prevent target leakage.
+        # to prevent target leakage. Derive rates from raw observations first.
         hvals: dict[str, float | None] = {}
         avals: dict[str, float | None] = {}
 
@@ -901,17 +979,42 @@ def build_features(
         hvals["shot_efficiency"] = shot_efficiency(row.home_goals, hvals["shots"])
         avals["shot_efficiency"] = shot_efficiency(row.away_goals, avals["shots"])
 
+        for values, opponent_values, conceded in (
+            (hvals, avals, row.away_goals), (avals, hvals, row.home_goals),
+        ):
+            values["goals_conceded"] = float(conceded)
+            values["shots_on_target_conceded"] = opponent_values["shots_on_target"]
+            saves = values["goalkeeper_saves"]
+            values["save_rate"] = (
+                saves / (saves + conceded)
+                if pd.notna(saves) and saves >= 0 and saves + conceded > 0 else np.nan
+            )
+            # API blocked shots belong to the attacking team, so use the
+            # opponent's blocked attempts to measure this team's blocking.
+            shots, blocked = opponent_values["shots"], opponent_values["blocked_shots"]
+            values["block_rate"] = (
+                blocked / shots if pd.notna(shots) and pd.notna(blocked)
+                and shots > 0 and 0 <= blocked <= shots else np.nan
+            )
+
+        # Opponents' venue ratings are still pre-match here. Never use the
+        # post-result Elo or the team's own Elo to weight its performance.
+        hvals = opponent_elo_weighted_stats(hvals, away.away_elo)
+        avals = opponent_elo_weighted_stats(avals, home.home_elo)
+
         for feature in ROLLING_FEATURES:
-            home.home_ewma[feature] = ewma_update(
+            (home.home_ewma[feature], home.home_ewma_mass[feature]) = ewma_update(
                 home.home_ewma.get(feature),
                 hvals[feature],
                 alpha,
+                home.home_ewma_mass.get(feature, 0.0),
             )
 
-            away.away_ewma[feature] = ewma_update(
+            (away.away_ewma[feature], away.away_ewma_mass[feature]) = ewma_update(
                 away.away_ewma.get(feature),
                 avals[feature],
                 alpha,
+                away.away_ewma_mass.get(feature, 0.0),
             )
 
         score_home = (
@@ -1037,18 +1140,20 @@ def print_formula(label: str, model: Pipeline) -> None:
 
 
 def outcome_probabilities(lambda_home: float, lambda_away: float, max_goals: int = 10, *, rho: float = 0.0) -> tuple[float, float, float]:
-    goals = np.arange(max_goals + 1)
-    matrix = np.outer(poisson.pmf(goals, lambda_home), poisson.pmf(goals, lambda_away))
-    # A new fixture can have more extreme rates than the rho-fitting fixtures.
+    if not all(math.isfinite(x) and x > 0 for x in (lambda_home, lambda_away)):
+        raise ValueError("Expected goals must be finite and positive.")
+    if not math.isfinite(rho):
+        raise ValueError("Dixon-Coles rho must be finite.")
     lower = max(-1 / lambda_home, -1 / lambda_away) + 1e-9
     upper = min(1.0, 1 / (lambda_home * lambda_away)) - 1e-9
     rho = float(np.clip(rho, lower, upper))
-    matrix[0, 0] *= 1 - lambda_home * lambda_away * rho
-    matrix[0, 1] *= 1 + lambda_home * rho
-    matrix[1, 0] *= 1 + lambda_away * rho
-    matrix[1, 1] *= 1 - rho
-    matrix /= matrix.sum()
-    return float(np.tril(matrix, -1).sum()), float(np.trace(matrix)), float(np.triu(matrix, 1).sum())
+    # The four low-score corrections preserve total probability and margins.
+    correction = rho * lambda_home * lambda_away * math.exp(-lambda_home - lambda_away)
+    p = np.array([skellam.sf(0, lambda_home, lambda_away) + correction,
+                  skellam.pmf(0, lambda_home, lambda_away) - 2 * correction,
+                  skellam.cdf(-1, lambda_home, lambda_away) + correction])
+    p = np.maximum(p, 0)
+    return tuple(float(x) for x in p / p.sum())
 
 
 def evaluate(home_model: Pipeline, away_model: Pipeline, test: pd.DataFrame) -> None:
@@ -1061,11 +1166,39 @@ def evaluate(home_model: Pipeline, away_model: Pipeline, test: pd.DataFrame) -> 
     print(f"Home-goal Poisson deviance: {mean_poisson_deviance(test.home_goals, lh):.4f}")
     print(f"Away-goal Poisson deviance: {mean_poisson_deviance(test.away_goals, la):.4f}")
 
-def time_weights(frame: pd.DataFrame, cutoff: pd.Timestamp, half_life: float) -> np.ndarray:
-    if half_life <= 0:
-        return np.ones(len(frame))
-    age = (cutoff - pd.to_datetime(frame.kickoff, utc=True)).dt.total_seconds() / 86400
-    return np.exp2(-np.maximum(age.to_numpy(), 0) / half_life)
+def recency_decay_value(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number) or not 0 < number < 1:
+        raise argparse.ArgumentTypeError("--recency-decay must be strictly between 0 and 1.")
+    return number
+
+
+def game_weights(frame: pd.DataFrame, cutoff: pd.Timestamp, decay: float) -> np.ndarray:
+    """Return positional [home, away] weights based on each team's venue history.
+
+    Latest game = 1; preceding game = decay; preceding one = decay**2.
+    Calendar gaps never change the ratio. Compute before filtering coverage
+    so removing an unsupported fixture cannot change the remaining weights.
+    """
+    if not math.isfinite(decay) or not 0 < decay < 1:
+        raise ValueError("Recency decay must be strictly between 0 and 1.")
+    cutoff = pd.to_datetime(cutoff, utc=True)
+    kickoff = pd.to_datetime(frame.kickoff, utc=True)
+    if pd.isna(cutoff) or kickoff.isna().any():
+        raise ValueError("Recency weighting requires valid kickoff dates and cutoff.")
+    if (kickoff > cutoff).any():
+        raise ValueError("Training matches must not be later than the fitting cutoff.")
+    ordered = frame[["fixture_id", "home_id", "away_id"]].reset_index(drop=True).copy()
+    ordered["kickoff"] = kickoff.to_numpy()
+    ordered = ordered.sort_values(["kickoff", "fixture_id"], ascending=False)
+    weights = np.empty((len(frame), 2), dtype=float)
+    for column, venue in enumerate(("home", "away")):
+        newer_games = ordered.groupby(f"{venue}_id").cumcount().to_numpy()
+        values = np.power(decay, newer_games)
+        if np.any(values == 0):
+            raise ValueError("Decay is too strong for this history; increase --recency-decay.")
+        weights[ordered.index.to_numpy(), column] = values
+    return weights
 
 
 def fit_rho(frame, home, away, weights) -> float:
@@ -1097,14 +1230,66 @@ def supported_fixtures(models: dict, frame: pd.DataFrame) -> pd.DataFrame:
     return frame.loc[np.asarray(mask, dtype=bool)].copy()
 
 
-def fit_team_bundle(data, cutoff, regularization, half_life, use_dc):
-    models = fit_team_models(data, regularization, time_weights(data, cutoff, half_life))
-    covered = supported_fixtures(models, data)
+def fit_team_bundle(data, cutoff, regularization, recency_decay, use_dc):
+    weights = game_weights(data, cutoff, recency_decay)
+    models = fit_team_models(data, regularization, weights)
+    coverage = venue_model_coverage(models, data)
+    covered = data.loc[coverage]
     rho = 0.0
     if use_dc and not covered.empty:
         home, away = predict_team_rates(models, covered)
-        rho = fit_rho(covered, home, away, time_weights(covered, cutoff, half_life))
+        # Both teams' venue histories contribute to the shared correction.
+        dc_weights = np.sqrt(weights[coverage, 0]) * np.sqrt(weights[coverage, 1])
+        rho = fit_rho(covered, home, away, dc_weights)
     return models, rho
+
+
+def select_parameters(data, regularization, recency_decay, use_dc, league_id):
+    """Select on two expanding chronological folds inside training data only.
+
+    Score identical fixtures for every candidate. The external holdout/test
+    season is never passed here. Keep the requested baseline on near ties.
+    """
+    ordered = data.sort_values(["kickoff", "fixture_id"])
+    baseline = (regularization, recency_decay, use_dc)
+    if len(ordered) < 300:
+        return baseline, {"reason": "fewer than 300 training matches", "folds": []}
+    folds = []
+    for start, stop in ((0.6, 0.8), (0.8, 1.0)):
+        cutoff = ordered.iloc[int(len(ordered) * start)].kickoff
+        end = (ordered.iloc[int(len(ordered) * stop)].kickoff
+               if stop < 1 else ordered.kickoff.max() + pd.Timedelta(nanoseconds=1))
+        history = ordered[ordered.kickoff < cutoff]
+        validation = ordered[(ordered.kickoff >= cutoff) & (ordered.kickoff < end)
+                             & (ordered.league_id == league_id)]
+        models, _ = fit_team_bundle(history, cutoff, *baseline)
+        validation = supported_fixtures(models, validation)
+        if len(validation) < 30:
+            return baseline, {"reason": "insufficient validation coverage", "folds": []}
+        folds.append((history, validation, cutoff))
+    candidates = [baseline]
+    candidates += [(a, d, dc) for a in (0.01, 0.1, 1.0)
+                   for d in (0.95, 0.98, 0.995) for dc in (False, True)
+                   if (a, d, dc) != baseline]
+    scores = []
+    for candidate in candidates:
+        losses = []
+        for history, validation, cutoff in folds:
+            models, rho = fit_team_bundle(history, cutoff, *candidate)
+            home, away = predict_team_rates(models, validation)
+            p = shared_probabilities(home, away, rho)
+            losses.extend(-np.log(np.clip(p[np.arange(len(p)), actual_outcomes(validation)], 1e-15, 1)))
+        scores.append(float(np.mean(losses)))
+    best = int(np.argmin(scores))
+    if scores[0] - scores[best] < 0.002:
+        best = 0
+    report = {"metric": "1X2 log loss", "baseline_loss": scores[0],
+              "selected_loss": scores[best], "selected": list(candidates[best]),
+              "folds": [{"cutoff": c.isoformat(), "matches": len(v)} for _, v, c in folds],
+              "candidates": [{"parameters": list(c), "loss": loss} for c, loss in zip(candidates, scores)]}
+    print(f"Internal validation: log loss {scores[0]:.4f} -> {scores[best]:.4f}; "
+          f"alpha/decay/DC={candidates[best]}")
+    return candidates[best], report
 
 
 def shared_probabilities(home, away, rho):
@@ -1119,15 +1304,42 @@ def actual_outcomes(frame):
                     np.where(frame.home_goals == frame.away_goals, 1, 2))
 
 
+def report_win_calibration(actual, probabilities):
+    """Report genuinely held-out win confidence, including the away subset."""
+    actual = np.asarray(actual)
+    p = np.asarray(probabilities)
+    winners = np.where(p[:, 0] >= p[:, 2], 0, 2)
+    confidence = p[np.arange(len(p)), winners]
+    for label, mask in (
+        ("All win predictions >=60%", confidence >= 0.60),
+        ("Away win predictions >=60%", (confidence >= 0.60) & (winners == 2)),
+        ("Away win predictions 55-65%", (confidence >= 0.55) & (confidence < 0.65) & (winners == 2)),
+    ):
+        n = int(mask.sum())
+        if not n:
+            print(f"{label}: 0 matches; reliability not established")
+            continue
+        successes = int(np.sum(actual[mask] == winners[mask]))
+        observed = successes / n
+        z = 1.96
+        denominator = 1 + z*z/n
+        center = (observed + z*z/(2*n))/denominator
+        radius = z * math.sqrt(observed*(1-observed)/n + z*z/(4*n*n))/denominator
+        print(f"{label}: {successes}/{n} ({observed:.2%}); "
+              f"mean forecast {confidence[mask].mean():.2%}; "
+              f"95% Wilson interval {center-radius:.2%}-{center+radius:.2%}")
+
+
 def train(args: argparse.Namespace) -> None:
-    # Fit each team and venue independently; retain the backtest probability utilities.
+    # Fit shared venue slopes and regularized team scoring offsets.
+    print(f"Game-order decay: {args.recency_decay:g} per previous team/venue game")
 
     if not args.db.is_file():
         raise SystemExit(f"Database not found: {args.db}")
     if not 0 < args.test_fraction < 1:
         raise SystemExit("--test-fraction must be between 0 and 1.")
-    if args.half_life < 0 or args.regularization < 0:
-        raise SystemExit("Half-life and regularization must be nonnegative.")
+    if args.regularization < 0:
+        raise SystemExit("Regularization must be nonnegative.")
     con = connect(args.db)
     try:
         matches = load_matches(con)
@@ -1154,16 +1366,10 @@ def train(args: argparse.Namespace) -> None:
     ).sort_values(["kickoff", "fixture_id"]).reset_index(drop=True)
 
     def fit_venue_models(data: pd.DataFrame, cutoff: pd.Timestamp):
-        model = fit_team_models(
-            data, args.regularization, time_weights(data, cutoff, args.half_life)
+        # Share the exact fitting path with backtest.
+        return fit_team_bundle(
+            data, cutoff, args.regularization, args.recency_decay, args.dixon_coles
         )
-        rho = 0.0
-        if args.dixon_coles:
-            covered = data.loc[venue_model_coverage(model, data)]
-            if not covered.empty:
-                home, away = predict_team_rates(model, covered)
-                rho = fit_rho(covered, home, away, time_weights(covered, cutoff, args.half_life))
-        return model, rho
 
     # Keep simultaneous kickoffs together in the chronological holdout.
     split = min(len(frame) - 1, max(1, int(len(frame) * (1 - args.test_fraction))))
@@ -1172,6 +1378,11 @@ def train(args: argparse.Namespace) -> None:
     test = frame[frame.kickoff >= cutoff]
     if training.empty:
         raise SystemExit("No training matches before the holdout cutoff.")
+    tuning = None
+    if args.auto_tune:
+        selected, tuning = select_parameters(training, args.regularization,
+                                              args.recency_decay, args.dixon_coles, FIRST_DIVISION)
+        args.regularization, args.recency_decay, args.dixon_coles = selected
     evaluation_model, evaluation_rho = fit_venue_models(training, cutoff)
     covered_test = test.loc[venue_model_coverage(evaluation_model, test)]
     print(f"Holdout coverage: {len(covered_test)}/{len(test)} matches")
@@ -1180,6 +1391,7 @@ def train(args: argparse.Namespace) -> None:
         home, away = predict_team_rates(evaluation_model, covered_test)
         probabilities = shared_probabilities(home, away, evaluation_rho)
         actual = actual_outcomes(covered_test)
+        report_win_calibration(actual, probabilities)
         print(f"1X2 accuracy: {np.mean(probabilities.argmax(axis=1) == actual):.2%}")
         print(f"1X2 log loss: {log_loss(actual, probabilities, labels=[0, 1, 2]):.4f}")
         print(f"Home-goal Poisson deviance: {mean_poisson_deviance(covered_test.home_goals, home):.4f}")
@@ -1203,8 +1415,13 @@ def train(args: argparse.Namespace) -> None:
         "prediction_league_id": FIRST_DIVISION,
         "training_cutoff": cutoff.isoformat(),
         "regularization": args.regularization,
-        "half_life": args.half_life,
+        "recency_decay": args.recency_decay,
+        "weighting": "team_venue_game_order",
+        "structure": "shared_venue_slopes_shrunk_team_intercepts",
+        "team_intercept_prior_games": TEAM_INTERCEPT_PRIOR_GAMES,
+        "stat_weighting": STAT_WEIGHTING,
         "use_dc": args.dixon_coles,
+        "parameter_selection": tuning,
         "trained_at": datetime.now(timezone.utc).isoformat(),
     }, args.model)
     names = dict(zip(matches.home_id, matches.home_name))
@@ -1254,7 +1471,7 @@ def print_team_comparison(
         f"{'Home matches':<30} {home.home_games:>20d} {away.home_games:>20d} {home.home_games - away.home_games:>15d}")
     print(
         f"{'Away matches':<30} {home.away_games:>20d} {away.away_games:>20d} {home.away_games - away.away_games:>15d}")
-    print("\nVenue-specific rolling statistics used for this fixture")
+    print("\nOpponent-Elo-weighted venue rolling statistics used for this fixture")
     for feature in ROLLING_FEATURES:
         home_value = home.home_ewma.get(feature)
         away_value = away.away_ewma.get(feature)
@@ -1264,7 +1481,7 @@ def print_team_comparison(
             f"{display_value(away_value):>20} {display_value(difference):>15}"
         )
 
-    print("\nOther-venue rolling statistics (not used for this fixture)")
+    print("\nOther-venue Elo-weighted rolling statistics (not used for this fixture)")
     print(f"{'Metric':<30} {home_name + ' away':>20} {away_name + ' home':>20}")
     print("-" * 72)
     for feature in ROLLING_FEATURES:
@@ -1443,13 +1660,13 @@ def add_three_bet_arguments(q):
                    help="Number of alternative three-ticket setups to print (default: 1)")
 
 def predict(args: argparse.Namespace) -> None:
-    # Use the same team/venue routing as the training holdout.
+    # Use the same shared slopes and team/venue routing as the holdout.
 
     betting = _validate_three_bet_args(args)
     bundle = joblib.load(args.model)
     if bundle.get("model_kind") != MODEL_KIND:
         raise SystemExit(
-            "Retrain with football_poisson.py train to create separate home and away formulas."
+            "Model structure changed. Retrain with football_poisson.py train for opponent-Elo-weighted statistics and shared venue slopes."
         )
     if bundle.get("features") != TEAM_MODEL_FEATURES:
         raise SystemExit("Team formula features changed. Retrain the model.")
@@ -1520,7 +1737,7 @@ def predict(args: argparse.Namespace) -> None:
         p_over = float(poisson.sf(2, result["lh"] + result["la"]))
         print(f"{result['home_name']} vs {result['away_name']}")
         print_team_comparison(result["home_name"], result["away_name"], result["home"], result["away"])
-        print("\nPrediction — separate team home/away Poisson formulas")
+        print("\nPrediction — shared venue slopes with shrunk team scoring adjustments")
         print(f"Training cutoff: {bundle['training_cutoff']}")
         print(f"Form as of: {as_of.isoformat()}")
         print(f"Latest cached match used: {matches.kickoff.max().isoformat()}")
@@ -1535,6 +1752,7 @@ def predict(args: argparse.Namespace) -> None:
         print_three_bet_setups(first, second, args)
 
 def backtest(args: argparse.Namespace) -> None:
+    print(f"Game-order decay: {args.recency_decay:g} per previous team/venue game")
     if args.train_through >= args.test_season:
         raise SystemExit("--train-through must be earlier than --test-season.")
 
@@ -1623,8 +1841,12 @@ def backtest(args: argparse.Namespace) -> None:
 
     # Fit imputers, scalers and coefficients using training data ONLY.
     # These models are never refitted on the test season.
+    if args.auto_tune:
+        selected, _ = select_parameters(training, args.regularization,
+                                        args.recency_decay, args.dixon_coles, args.league_id)
+        args.regularization, args.recency_decay, args.dixon_coles = selected
     team_models, rho = fit_team_bundle(
-        training, test_start, args.regularization, args.half_life, args.dixon_coles
+        training, test_start, args.regularization, args.recency_decay, args.dixon_coles
     )
 
     if not team_models:
@@ -1738,6 +1960,15 @@ def backtest(args: argparse.Namespace) -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     results.to_csv(args.output, index=False)
 
+    # Report the full predicted population as well as the requested confidence subset.
+    all_predicted = results.loc[predicted_mask]
+    if not all_predicted.empty:
+        all_y = actual_outcomes(all_predicted)
+        all_p = all_predicted[["p_home", "p_draw", "p_away"]].to_numpy()
+        report_win_calibration(all_y, all_p)
+        print(f"\nAll predicted matches: {len(all_predicted)}")
+        print(f"All-match 1X2 accuracy: {np.mean(all_p.argmax(axis=1) == all_y):.2%}")
+        print(f"All-match log loss: {log_loss(all_y, all_p, labels=[0, 1, 2]):.4f}")
     scored = results.loc[scored_mask].copy()
 
     print(f"\nTraining through: {args.train_through}")
@@ -1850,9 +2081,12 @@ def parser() -> argparse.ArgumentParser:
     t.add_argument("--ewma-alpha", type=float, default=.25)
     t.add_argument("--min-history", type=int, default=5)
     t.add_argument("--regularization", type=float, default=0.01)
-    t.add_argument("--half-life", type=int, default=0, help="Time-weighting half-life in days; 0 gives equal weights")
+    t.add_argument("--recency-decay", type=recency_decay_value, default=DEFAULT_RECENCY_DECAY,
+                   help="Weight multiplier for each previous team/venue game (default: 0.95)")
     t.add_argument("--dixon-coles", action=argparse.BooleanOptionalAction, default=True)
     t.add_argument("--test-fraction", type=float, default=.20)
+    t.add_argument("--auto-tune", action=argparse.BooleanOptionalAction, default=False,
+                   help="Select regularization, decay and draw correction on internal chronological folds")
     t.set_defaults(func=train)
     q = sub.add_parser(
         "predict",
@@ -1878,9 +2112,11 @@ def parser() -> argparse.ArgumentParser:
     b.add_argument("--ewma-alpha", type=float, default=0.25)
     b.add_argument("--min-history", type=int, default=5)
     b.add_argument("--regularization", type=float, default=0.01)
-    b.add_argument("--half-life", type=int, default=0)
+    b.add_argument("--recency-decay", type=recency_decay_value, default=DEFAULT_RECENCY_DECAY,
+                   help="Weight multiplier for each previous team/venue game (default: 0.95)")
     b.add_argument("--dixon-coles", action=argparse.BooleanOptionalAction, default=True)
     b.add_argument("--output", type=Path, default=None)
+    b.add_argument("--auto-tune", action=argparse.BooleanOptionalAction, default=False)
     b.set_defaults(func=backtest)
     # Accept country/db both before and after the subcommand.
     for command in (d, t, q, b):

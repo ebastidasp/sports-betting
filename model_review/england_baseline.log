@@ -1,0 +1,93 @@
+Game-order decay: 0.95 per previous team/venue game
+All win predictions >=60%: 41/64 (64.06%); mean forecast 66.48%; 95% Wilson interval 51.82%-74.71%
+Away win predictions >=60%: 4/7 (57.14%); mean forecast 64.32%; 95% Wilson interval 25.05%-84.18%
+Away win predictions 55-65%: 7/19 (36.84%); mean forecast 57.94%; 95% Wilson interval 19.15%-58.96%
+
+All predicted matches: 380
+All-match 1X2 accuracy: 49.47%
+All-match log loss: 1.0387
+
+Training through: 2024
+Training matches: 5289
+Team venue formulas: 108
+Dixon–Coles rho: 0.01071
+Test season: 2025
+Test league: 39
+Predicted matches: 380/380
+Evaluated matches with win probability >= 60%: 64
+Saved match-by-match results: model_review\england_baseline.csv
+Skipped — Neither team has at least 60% win probability: 316
+
+Over 2.5 goals backtest — probability >= 60%
+Qualified matches: 48/380 predicted matches
+Correct predictions (3+ goals): 28
+Incorrect predictions (0–2 goals): 20
+Over 2.5 hit rate: 58.33%
+Average predicted probability: 62.73%
+Expected successful predictions: 30.1
+Binary Brier score: 0.2454
+Binary log loss: 0.6841
+
+All predicted over-2.5 matches (probability >= 60%)
+                Date            Home              Away P(Over 2.5) Actual score  Total goals Correct
+2025-08-15 19:00 UTC       Liverpool       Bournemouth      61.66%        4 - 2            6     Yes
+2025-08-16 14:00 UTC        Brighton            Fulham      60.23%        1 - 1            2      No
+2025-08-16 14:00 UTC       Tottenham           Burnley      61.31%        3 - 0            3     Yes
+2025-08-25 19:00 UTC       Newcastle         Liverpool      68.47%        2 - 3            5     Yes
+2025-08-30 14:00 UTC       Tottenham       Bournemouth      62.07%        0 - 1            1      No
+2025-08-31 15:30 UTC       Liverpool           Arsenal      62.03%        1 - 0            1      No
+2025-09-13 14:00 UTC       Newcastle            Wolves      60.14%        1 - 0            1      No
+2025-10-04 16:30 UTC         Chelsea         Liverpool      61.46%        2 - 1            3     Yes
+2025-10-05 13:00 UTC       Newcastle Nottingham Forest      61.39%        2 - 0            2      No
+2025-10-25 14:00 UTC       Newcastle            Fulham      60.54%        2 - 1            3     Yes
+2025-10-25 19:00 UTC       Brentford         Liverpool      62.11%        3 - 2            5     Yes
+2025-11-02 16:30 UTC Manchester City       Bournemouth      61.44%        3 - 1            4     Yes
+2025-11-09 16:30 UTC Manchester City         Liverpool      64.50%        3 - 0            3     Yes
+2025-11-29 15:00 UTC       Brentford           Burnley      62.15%        3 - 1            4     Yes
+2025-11-29 15:00 UTC Manchester City             Leeds      63.48%        3 - 2            5     Yes
+2025-11-30 14:05 UTC        West Ham         Liverpool      61.42%        0 - 2            2      No
+2025-12-06 15:00 UTC Manchester City        Sunderland      61.36%        3 - 0            3     Yes
+2025-12-06 15:00 UTC       Newcastle           Burnley      66.29%        2 - 1            3     Yes
+2025-12-13 15:00 UTC       Liverpool          Brighton      64.13%        2 - 0            2      No
+2025-12-20 15:00 UTC Manchester City          West Ham      61.20%        3 - 0            3     Yes
+2025-12-21 16:30 UTC     Aston Villa Manchester United      61.23%        2 - 1            3     Yes
+2025-12-27 15:00 UTC       Brentford       Bournemouth      63.15%        4 - 1            5     Yes
+2025-12-30 19:30 UTC         Chelsea       Bournemouth      66.81%        2 - 2            4     Yes
+2026-01-01 17:30 UTC       Liverpool             Leeds      63.67%        0 - 0            0      No
+2026-01-04 12:30 UTC           Leeds Manchester United      65.08%        1 - 1            2      No
+2026-01-07 19:30 UTC Manchester City          Brighton      61.15%        1 - 1            2      No
+2026-01-19 20:00 UTC        Brighton       Bournemouth      67.18%        1 - 1            2      No
+2026-01-24 15:00 UTC Manchester City            Wolves      62.21%        2 - 0            2      No
+2026-01-25 14:00 UTC       Newcastle       Aston Villa      61.82%        0 - 2            2      No
+2026-02-07 15:00 UTC         Burnley          West Ham      62.15%        0 - 2            2      No
+2026-02-07 17:30 UTC       Newcastle         Brentford      61.33%        2 - 3            5     Yes
+2026-02-10 19:30 UTC         Chelsea             Leeds      60.27%        2 - 2            4     Yes
+2026-02-11 19:30 UTC     Aston Villa          Brighton      63.29%        1 - 0            1      No
+2026-02-21 15:00 UTC     Aston Villa             Leeds      61.80%        1 - 1            2      No
+2026-02-28 15:00 UTC         Burnley         Brentford      61.25%        3 - 4            7     Yes
+2026-02-28 15:00 UTC       Liverpool          West Ham      63.22%        5 - 2            7     Yes
+2026-03-04 19:30 UTC Manchester City Nottingham Forest      62.11%        2 - 2            4     Yes
+2026-03-04 20:15 UTC       Newcastle Manchester United      63.65%        2 - 1            3     Yes
+2026-03-14 15:00 UTC         Burnley       Bournemouth      65.02%        0 - 0            0      No
+2026-03-15 16:30 UTC       Liverpool         Tottenham      63.42%        1 - 1            2      No
+2026-04-18 14:00 UTC       Newcastle       Bournemouth      65.74%        1 - 2            3     Yes
+2026-04-22 19:00 UTC         Burnley   Manchester City      65.82%        0 - 1            1      No
+2026-05-02 14:00 UTC       Newcastle          Brighton      61.84%        3 - 1            4     Yes
+2026-05-09 11:30 UTC       Liverpool           Chelsea      60.63%        1 - 1            2      No
+2026-05-09 16:30 UTC Manchester City         Brentford      60.01%        3 - 0            3     Yes
+2026-05-13 19:00 UTC Manchester City    Crystal Palace      64.29%        3 - 0            3     Yes
+2026-05-15 19:00 UTC     Aston Villa         Liverpool      60.48%        4 - 2            6     Yes
+2026-05-24 15:00 UTC Manchester City       Aston Villa      65.26%        1 - 2            3     Yes
+
+1X2 accuracy: 64.06%
+1X2 log loss: 0.8900
+Multiclass Brier score (0–2): 0.5169
+Home-goal Poisson deviance: 0.9540
+Away-goal Poisson deviance: 0.9829
+
+Confusion matrix: rows=actual, columns=predicted
+predicted_result   H  D  A
+actual_result             
+H                 37  0  0
+D                 12  0  3
+A                  8  0  4

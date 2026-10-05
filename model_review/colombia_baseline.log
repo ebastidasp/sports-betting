@@ -1,0 +1,49 @@
+Game-order decay: 0.95 per previous team/venue game
+All win predictions >=60%: 38/61 (62.30%); mean forecast 66.13%; 95% Wilson interval 49.75%-73.39%
+Away win predictions >=60%: 0/2 (0.00%); mean forecast 60.91%; 95% Wilson interval 0.00%-65.76%
+Away win predictions 55-65%: 2/7 (28.57%); mean forecast 58.21%; 95% Wilson interval 8.22%-64.11%
+
+All predicted matches: 409
+All-match 1X2 accuracy: 48.90%
+All-match log loss: 1.0210
+
+Training through: 2024
+Training matches: 1959
+Team venue formulas: 50
+Dixon–Coles rho: 0.00278
+Test season: 2025
+Test league: 239
+Predicted matches: 409/450
+Evaluated matches with win probability >= 60%: 61
+Saved match-by-match results: model_review\colombia_baseline.csv
+Skipped — Neither team has at least 60% win probability: 348
+Skipped — No pre-test home formula for host or away formula for visitor: 30
+Skipped — Insufficient venue history or Elo calibration: 10
+Skipped — Missing match statistics: 1
+
+Over 2.5 goals backtest — probability >= 60%
+Qualified matches: 1/409 predicted matches
+Correct predictions (3+ goals): 0
+Incorrect predictions (0–2 goals): 1
+Over 2.5 hit rate: 0.00%
+Average predicted probability: 60.36%
+Expected successful predictions: 0.6
+Binary Brier score: 0.3643
+Binary log loss: 0.9252
+
+All predicted over-2.5 matches (probability >= 60%)
+                Date   Home                   Away P(Over 2.5) Actual score  Total goals Correct
+2025-11-20 01:30 UTC Junior Independiente Medellin      60.36%        1 - 0            1      No
+
+1X2 accuracy: 62.30%
+1X2 log loss: 0.8840
+Multiclass Brier score (0–2): 0.5194
+Home-goal Poisson deviance: 0.8746
+Away-goal Poisson deviance: 1.1980
+
+Confusion matrix: rows=actual, columns=predicted
+predicted_result   H  D  A
+actual_result             
+H                 38  0  0
+D                 14  0  2
+A                  7  0  0

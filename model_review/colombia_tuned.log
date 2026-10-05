@@ -1,0 +1,54 @@
+Game-order decay: 0.95 per previous team/venue game
+Internal validation: log loss 1.0304 -> 1.0233; alpha/decay/DC=(0.1, 0.995, True)
+All win predictions >=60%: 37/54 (68.52%); mean forecast 65.01%; 95% Wilson interval 55.26%-79.32%
+Away win predictions >=60%: 0 matches; reliability not established
+Away win predictions 55-65%: 0 matches; reliability not established
+
+All predicted matches: 409
+All-match 1X2 accuracy: 47.92%
+All-match log loss: 1.0211
+
+Training through: 2024
+Training matches: 1959
+Team venue formulas: 50
+Dixon–Coles rho: -0.06363
+Test season: 2025
+Test league: 239
+Predicted matches: 409/450
+Evaluated matches with win probability >= 60%: 54
+Saved match-by-match results: model_review\colombia_tuned.csv
+Skipped — Neither team has at least 60% win probability: 355
+Skipped — No pre-test home formula for host or away formula for visitor: 30
+Skipped — Insufficient venue history or Elo calibration: 10
+Skipped — Missing match statistics: 1
+
+Over 2.5 goals backtest — probability >= 60%
+Qualified matches: 5/409 predicted matches
+Correct predictions (3+ goals): 4
+Incorrect predictions (0–2 goals): 1
+Over 2.5 hit rate: 80.00%
+Average predicted probability: 62.00%
+Expected successful predictions: 3.1
+Binary Brier score: 0.1937
+Binary log loss: 0.5785
+
+All predicted over-2.5 matches (probability >= 60%)
+                Date              Home                   Away P(Over 2.5) Actual score  Total goals Correct
+2025-10-26 23:30 UTC Atletico Nacional Independiente Medellin      61.97%        5 - 2            7     Yes
+2025-11-07 23:10 UTC Deportivo Pereira Independiente Medellin      60.85%        1 - 4            5     Yes
+2025-11-20 01:30 UTC            Junior Independiente Medellin      62.27%        1 - 0            1      No
+2025-11-27 23:30 UTC   America de Cali Independiente Medellin      60.50%        2 - 1            3     Yes
+2025-12-04 23:30 UTC Atletico Nacional Independiente Medellin      64.42%        2 - 1            3     Yes
+
+1X2 accuracy: 68.52%
+1X2 log loss: 0.8293
+Multiclass Brier score (0–2): 0.4760
+Home-goal Poisson deviance: 0.7932
+Away-goal Poisson deviance: 1.2739
+
+Confusion matrix: rows=actual, columns=predicted
+predicted_result   H  D  A
+actual_result             
+H                 37  0  0
+D                 11  0  0
+A                  6  0  0

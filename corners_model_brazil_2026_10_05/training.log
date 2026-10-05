@@ -1,0 +1,13 @@
+Building corner histories from 56774 FT fixtures in 12 caches...
+Validation {'family': 'league'}: total MAE=2.642, RMSE=3.309
+Validation {'family': 'matchup'}: total MAE=2.626, RMSE=3.295
+Validation {'family': 'poisson', 'alpha': 0.1}: total MAE=2.603, RMSE=3.277
+Validation {'family': 'poisson', 'alpha': 1.0}: total MAE=2.605, RMSE=3.275
+Validation {'family': 'poisson', 'alpha': 10.0}: total MAE=2.617, RMSE=3.283
+Validation {'family': 'boosting', 'leaves': 7, 'iterations': 120}: total MAE=2.628, RMSE=3.292
+Validation {'family': 'boosting', 'leaves': 15, 'iterations': 160}: total MAE=2.629, RMSE=3.291
+Validation {'family': 'boosting', 'leaves': 15, 'iterations': 240}: total MAE=2.631, RMSE=3.294
+Selected: [{'family': 'matchup'}, {'family': 'poisson', 'alpha': 0.1}], weights=[0.25, 0.75]; dispersion={'home': 0.07459747592194639, 'away': 0.09202958414865879, 'total': 0.011524034484390582}
+External test: {'observations': 3805, 'mae': 2.6553787623192044, 'rmse': 3.3165593918716123, 'poisson_deviance': 1.17448573076389, 'bias': 0.03951882075094643, 'within_2': 0.4454664914586071}; league baseline: {'observations': 3805, 'mae': 2.693820708122278, 'rmse': 3.3584560470463325, 'poisson_deviance': 1.2035928808945702, 'bias': 0.22979925690063585, 'within_2': 0.44073587385019714}
+Final training: 83138 observed team counts...
+Saved: C:\Users\ebpun\OneDrive\Documentos\Football Model\corners_model_brazil_2026_10_05\corners_model.joblib
